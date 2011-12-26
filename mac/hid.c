@@ -663,7 +663,7 @@ struct hid_device_info  HID_API_EXPORT *hid_enumerate(unsigned short vendor_id, 
     setlocale(LC_ALL,"");
     
     /* Set up the HID Manager if it hasn't been done */
-    //hid_init();
+    hid_init();
     
     if (!hid_mgr) 
         return NULL;
