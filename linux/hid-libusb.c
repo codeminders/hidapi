@@ -1045,7 +1045,8 @@ extern "C" {
     }
     
     
-    int HID_API_EXPORT hid_write(hid_device *dev, const unsigned char *data, size_t length)
+    
+    int HID_API_EXPORT hid_write_timeout(hid_device *dev, const unsigned char *data, size_t length, int milliseconds)
     {
         int res;
         int report_number = data[0];
@@ -1057,7 +1058,6 @@ extern "C" {
             skipped_report_id = 1;
         }
         
-        
         if (dev->output_endpoint <= 0) {
             /* No interrput out endpoint. Use the Control Endpoint */
             res = libusb_control_transfer(dev->device_handle,
@@ -1066,7 +1066,7 @@ extern "C" {
                                           (2/*HID output*/ << 8) | report_number,
                                           dev->interface,
                                           (unsigned char *)data, length,
-                                          1000/*timeout millis*/);
+                                          milliseconds/*timeout millis*/);
             
             if (res < 0)
                 return -1;
@@ -1083,7 +1083,7 @@ extern "C" {
                                             dev->output_endpoint,
                                             (unsigned char*)data,
                                             length,
-                                            &actual_length, 1000);
+                                            &actual_length, milliseconds);
             
             if (res < 0)
                 return -1;
@@ -1094,6 +1094,12 @@ extern "C" {
             return actual_length;
         }
     }
+    
+    int HID_API_EXPORT hid_write(hid_device *dev, const unsigned char *data, size_t length)
+    {
+        return hid_write_timeout(dev, data, length, 0);// was 1000 
+    }
+    
     
     /* Helper function, to simplify hid_read().
      This should be called with dev->mutex locked. */
@@ -1111,8 +1117,7 @@ extern "C" {
         return len;
     }
     
-    
-    int HID_API_EXPORT hid_read(hid_device *dev, unsigned char *data, size_t length)
+    int HID_API_EXPORT hid_read_timeout(hid_device *dev, unsigned char *data, size_t length, int milliseconds)
     {
         int bytes_read = -1;
         
@@ -1143,6 +1148,26 @@ extern "C" {
             pthread_cond_wait(&dev->condition, &dev->mutex);
             bytes_read = return_data(dev, data, length);
         }
+        else if (milliseconds > 0) {
+            /* Non-blocking, but called with timeout. */
+            int res;
+            struct timespec ts;
+            struct timeval tv;
+            TIMEVAL_TO_TIMESPEC(&tv, &ts);
+            ts.tv_sec += milliseconds / 1000;
+            ts.tv_nsec += (milliseconds % 1000) * 1000000;
+            if (ts.tv_nsec >= 1000000000L) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000L;
+            }
+            res = cond_timedwait(dev, &dev->condition, &dev->mutex, &ts);
+            if (res == 0)
+                bytes_read = return_data(dev, data, length);
+            else if (res == ETIMEDOUT)
+                bytes_read = 0;
+            else
+                bytes_read = -1;
+        }
         else {
             bytes_read = 0;
         }
@@ -1151,6 +1176,11 @@ extern "C" {
         pthread_mutex_unlock(&dev->mutex);
         
         return bytes_read;
+    }
+    
+    int HID_API_EXPORT hid_read(hid_device *dev, unsigned char *data, size_t length)
+    {
+        return hid_read_timeout(dev, data, length, 0);    
     }
     
     int HID_API_EXPORT hid_set_nonblocking(hid_device *dev, int nonblock)
